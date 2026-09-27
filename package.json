@@ -1,0 +1,20 @@
+{
+  "name": "trajectory-collision-stage",
+  "version": "1.0.0",
+  "description": "走位轨迹碰撞排练台：分段直线运动的连续解析碰撞检测与 Canvas 回放",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "jsdom": "^29.1.1"
+  },
+  "license": "MIT"
+}

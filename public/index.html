@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>走位轨迹碰撞排练台</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">◎</span>
+      <div>
+        <h1>走位轨迹碰撞排练台</h1>
+        <p class="subtitle">分段直线运动 · 二次方程连续解析求碰撞区间（无帧抽样）</p>
+      </div>
+    </div>
+    <div class="top-actions">
+      <button id="btn-obstacle" class="btn" title="在画布上拖出一个轴对齐禁入矩形（再点空白处单击可放默认尺寸）">＋ 禁入区</button>
+      <button id="btn-zone" class="btn" title="在画布上拖出一个轴对齐限员矩形（再点空白处单击可放默认尺寸）">＋ 限员区</button>
+      <button id="btn-sample" class="btn" title="载入内置路径交叉样例">重置样例</button>
+      <button id="btn-clear" class="btn btn-ghost" title="清空全部走位点">清空</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <!-- 左：舞台 -->
+    <section class="stage-col">
+      <div class="panel">
+        <div class="panel-head">
+          <span>舞台（世界坐标 1000 × 600）</span>
+          <span class="hint">拖动圆点走位 · 双击空白加帧 · 右键圆点删帧 · 选中圆点可改安全半径 · 拖动禁入区矩形移位 · 右键矩形删除 · 虚线彩框＝选中者的入场口令 · 紫色虚线框＝道具交接区 · 青色虚线框＝区域限员（当前超员变红）</span>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="stage" width="1000" height="600"></canvas>
+          <div id="tooltip" class="tooltip" hidden></div>
+        </div>
+        <div id="key-editor" class="key-editor" hidden>
+          <div class="ke-head">
+            <span id="ke-info" class="ke-info">关键帧</span>
+            <label class="ke-radius-edit">
+              安全半径
+              <input id="ke-radius" type="number" min="0" max="150" step="1" />
+              <button id="ke-clear" class="btn btn-mini" type="button" title="清除本帧半径，恢复继承表演者当前半径">继承</button>
+            </label>
+          </div>
+          <div id="ke-hint" class="ke-hint">留空 = 继承表演者当前半径</div>
+        </div>
+        <div id="obstacle-editor" class="key-editor obstacle-editor" hidden>
+          <div class="ke-head">
+            <span id="oe-info" class="ke-info">禁入矩形</span>
+            <label class="ke-radius-edit">名称 <input id="oe-name" type="text" /></label>
+            <label class="ke-radius-edit">
+              宽 <input id="oe-width" type="number" min="0" step="1" />
+              高 <input id="oe-height" type="number" min="0" step="1" />
+            </label>
+            <button id="oe-delete" class="btn btn-mini" type="button" title="删除该禁入矩形">✕ 删除</button>
+          </div>
+          <div class="ke-hint">轴对齐矩形：表演者按实时安全半径视为圆，连续解析侵入区间（无帧抽样）</div>
+        </div>
+        <div id="zone-editor" class="key-editor zone-editor" hidden>
+          <div class="ke-head">
+            <span id="ze-info" class="ke-info">限员矩形</span>
+            <label class="ke-radius-edit">名称 <input id="ze-name" type="text" /></label>
+            <label class="ke-radius-edit">
+              x <input id="ze-x" type="number" step="1" />
+              y <input id="ze-y" type="number" step="1" />
+              宽 <input id="ze-width" type="number" min="0" step="1" />
+              高 <input id="ze-height" type="number" min="0" step="1" />
+            </label>
+            <label class="ke-radius-edit">
+              人数上限 <input id="ze-limit" type="number" min="1" max="999" step="1" />
+            </label>
+            <button id="ze-delete" class="btn btn-mini" type="button" title="删除该限员区域">✕ 删除</button>
+          </div>
+          <div class="ke-hint">只统计圆心严格位于内部者：贴边、瞬时触角与零宽高区域不计；跨关键帧连续停留合并、同一人同次停留只计一次</div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div class="transport">
+            <button id="btn-play" class="btn btn-primary">▶ 播放</button>
+            <button id="btn-stop" class="btn">■ 停止</button>
+            <span class="time-readout">
+              <input id="time-input" type="number" min="0" step="0.1" value="0" />
+              / <span id="duration-readout">12.0</span> s
+            </span>
+          </div>
+          <div class="speed-group">
+            速度
+            <button class="btn btn-mini" data-speed="0.25">0.25×</button>
+            <button class="btn btn-mini active" data-speed="1">1×</button>
+            <button class="btn btn-mini" data-speed="2">2×</button>
+            <button class="btn btn-mini" data-speed="4">4×</button>
+          </div>
+        </div>
+
+        <div id="timeline" class="timeline">
+          <div class="timeline-ruler" id="timeline-ruler"></div>
+          <div id="timeline-lanes"></div>
+          <div class="timeline-playhead" id="playhead"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 右：表演者与结果 -->
+    <aside class="side-col">
+      <div class="panel">
+        <div class="panel-head">
+          <span>表演者（2～8 人）</span>
+          <button id="btn-add" class="btn btn-mini btn-primary">＋ 增加</button>
+        </div>
+        <div id="performers" class="performer-list"></div>
+        <div class="duration-edit">
+          总时长
+          <input id="duration-input" type="number" min="1" max="120" step="1" value="12" /> s
+        </div>
+      </div>
+
+      <div class="panel panel-cues" id="panel-cues">
+        <div class="panel-head">
+          <span>入场口令 · <span id="cue-performer-name"></span></span>
+          <button id="btn-cue-add" class="btn btn-mini btn-primary" title="在当前表演者当前圆心处投放一个入口矩形">＋ 新入口</button>
+        </div>
+        <div id="cue-list" class="cue-list"></div>
+        <div id="cue-empty" class="cue-empty" hidden></div>
+        <div class="cue-hint">
+          核对圆心轨迹：从矩形外进入<strong>内部</strong>的时刻才算进入；起点已在矩形内按 0 s 进入，
+          贴边/仅到角点不计。按口令顺序匹配时窗内严格递增的进入，同一次停留只计一次；
+          已触发时刻可点击跳转播放头。编辑走位/口令即时重算，随快照保存。
+        </div>
+      </div>
+
+      <div class="panel panel-handoffs" id="panel-handoffs">
+        <div class="panel-head">
+          <span>道具交接（时窗）</span>
+          <button id="btn-handoff-add" class="btn btn-mini btn-primary" title="新增一项交接：默认取当前选中者与下一名表演者，交接区落在两人当前圆心中点">＋ 新增交接</button>
+        </div>
+        <div id="handoff-list" class="handoff-list"></div>
+        <div id="handoff-empty" class="cue-empty" hidden></div>
+        <div class="cue-hint">
+          沿分段直线轨迹连续求两人<strong>圆心同时严格位于交接区内部</strong>且<strong>间距 ≤ 触达距离</strong>
+          的区间（贴边停留与仅瞬时触达不计，跨关键帧相接自动合并）；每段 [a,b] 若 b−a ≥ 最短持续秒数 d，
+          给出起始时窗 [a, b−d]。<strong>点击时窗跳转播放头</strong>；编辑走位或交接参数即时重算，配置随快照保存。
+        </div>
+      </div>
+
+      <div class="panel panel-zones" id="panel-zones">
+        <div class="panel-head">
+          <span>区域限员（超员时段）</span>
+          <button id="btn-zone-add" class="btn btn-mini btn-primary" title="新增一个默认尺寸的限员区域（也可用顶部「＋ 限员区」在画布上拖出）">＋ 新增限员区</button>
+        </div>
+        <div id="zone-list" class="zone-list"></div>
+        <div id="zone-empty" class="cue-empty" hidden></div>
+        <div class="cue-hint">
+          只统计<strong>圆心严格位于矩形内部</strong>的人：贴边、瞬时触角与<strong>零宽高区域不计</strong>，
+          跨关键帧的连续停留合并、同一人同次停留只计一次；同刻进出一并处理，不产生零长度超员段。
+          人数超过上限时按<strong>区间 · 人数 · 人员名单</strong>列出（名单变化即分段），
+          并显示<strong>全程峰值人数</strong>（只计有正持续时间的状态）。<strong>点击区间起点跳转播放头</strong>；
+          编辑走位或限员配置即时重算，配置随快照保存。
+        </div>
+      </div>
+
+      <div class="panel panel-snapshots">
+        <div class="panel-head">
+          <span id="snap-head">方案快照（0/8 · 存于本机浏览器）</span>
+        </div>
+        <div class="snap-save">
+          <input id="snap-name" type="text" class="snap-name-input" maxlength="24" placeholder="快照名称，如：初稿" />
+          <button id="btn-snap-save" class="btn btn-mini btn-primary" title="同名快照直接覆盖">📷 存为快照</button>
+        </div>
+        <div id="snap-list" class="snap-list"></div>
+        <div class="snap-compare">
+          <div class="snap-slot">
+            <label>方案 1（基准）</label>
+            <select id="snap-select-a"></select>
+          </div>
+          <div class="snap-vs">⇄</div>
+          <div class="snap-slot">
+            <label>方案 2</label>
+            <select id="snap-select-b"></select>
+          </div>
+        </div>
+        <div id="snap-status" class="snap-status" hidden></div>
+        <div id="snap-diff" class="snap-diff"></div>
+      </div>
+
+      <div class="panel panel-summary">
+        <div class="summary-row">
+          <div class="summary-item">
+            <label>首次碰撞时刻</label>
+            <strong id="sum-first">—</strong>
+          </div>
+          <div class="summary-item">
+            <label>当事人</label>
+            <strong id="sum-first-who">—</strong>
+          </div>
+        </div>
+        <div class="summary-row">
+          <div class="summary-item">
+            <label>全局最小间距</label>
+            <strong id="sum-min">—</strong>
+          </div>
+          <div class="summary-item">
+            <label>出现时刻 / 当事人</label>
+            <strong id="sum-min-who">—</strong>
+          </div>
+        </div>
+        <div class="summary-row clickable" id="sum-margin-row" title="点击跳转播放头到最小余量发生时刻">
+          <div class="summary-item">
+            <label>最小安全余量（间距 − 半径和）</label>
+            <strong id="sum-margin">—</strong>
+          </div>
+          <div class="summary-item">
+            <label>出现时刻 / 当事人</label>
+            <strong id="sum-margin-who">—</strong>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel panel-pairs" id="panel-obstacles" hidden>
+        <div class="panel-head"><span>禁入区侵入（按首次进入时刻升序 · 点击结果跳到进入时刻）</span></div>
+        <div id="obstacle-results" class="pair-list"></div>
+      </div>
+
+      <div class="panel panel-pairs">
+        <div class="panel-head"><span>逐对结果（按最小安全余量升序）</span></div>
+        <div id="pairs" class="pair-list"></div>
+      </div>
+    </aside>
+  </main>
+
+  <script src="core.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
