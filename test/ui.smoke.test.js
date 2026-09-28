@@ -1123,3 +1123,137 @@ test('区域限员：配置随快照保存并在载入时恢复', async () => {
   assert.equal([...rows[0].querySelectorAll('input[type="number"]')][4].value, '3');
   dom.window.close();
 });
+
+// ---------- 风险叠加时间轴 ----------
+
+test('风险叠加时间轴：启动即渲染样例风险段（起止/来源/人员），点击段落跳转播放头', async () => {
+  const dom = await boot();
+  const { window } = dom;
+  const doc = window.document;
+
+  const list = doc.getElementById('risk-list');
+  const rows = [...list.querySelectorAll('.risk-row')];
+  assert.equal(rows.length, 9, '样例合成 9 个风险段');
+  assert.equal(doc.getElementById('risk-empty').hidden, true, '有风险时不显示空态');
+
+  // 首段自 ≈2.60（丙丁碰撞），只含一个碰撞来源
+  const first = rows[0];
+  assert.match(first.querySelector('.risk-time').textContent, /2\.60\s*–/);
+  assert.equal(first.querySelectorAll('.risk-src-collision').length, 1);
+  assert.equal(first.querySelectorAll('.risk-src-obstacle').length, 0);
+  assert.equal(first.querySelectorAll('.risk-src-capacity').length, 0);
+  const firstMembers = [...first.querySelectorAll('.risk-member-tag')].map((el) => el.textContent);
+  assert.ok(firstMembers.some((n) => n.includes('丙')) && firstMembers.some((n) => n.includes('丁')));
+
+  // 三来源叠加段（≈5.53–6.47）同时带三类徽标与甲、乙、丙、丁
+  const merged = rows.find((row) =>
+    row.querySelectorAll('.risk-src-collision').length === 2 &&
+    row.querySelectorAll('.risk-src-obstacle').length === 2 &&
+    row.querySelectorAll('.risk-src-capacity').length === 1);
+  assert.ok(merged, '存在碰撞×2 + 侵入×2 + 超员×1 的叠加段');
+  const mergedMembers = [...merged.querySelectorAll('.risk-member-tag')].map((el) => el.textContent);
+  ['甲', '乙', '丙', '丁'].forEach((n) =>
+    assert.ok(mergedMembers.some((m) => m.includes(n)), '叠加段人员含 ' + n));
+
+  // 点击首段：播放头跳到该段起点
+  first.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  const tv = Number(doc.getElementById('time-input').value);
+  assert.ok(Math.abs(tv - 2.60) < 0.01, `播放头应跳到 ≈2.60，实际 ${tv}`);
+
+  // 播放头进入某段时该行高亮 active-now（跳到三来源叠加段起点 ≈5.53）
+  merged.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 5));
+  assert.ok(merged.classList.contains('active-now'), '当前段高亮');
+  assert.equal(first.classList.contains('active-now'), false, '非当前段不高亮');
+  dom.window.close();
+});
+
+test('风险叠加时间轴：拖走位后立即刷新；风险全部消除时显示空态', async () => {
+  const dom = await boot();
+  const { window } = dom;
+  const doc = window.document;
+  const canvas = doc.getElementById('stage');
+
+  function pointer(type, x, y) {
+    canvas.dispatchEvent(new window.MouseEvent(type, {
+      bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0
+    }));
+  }
+  function drag(from, to) {
+    pointer('pointerdown', from[0], from[1]);
+    pointer('pointermove', to[0], to[1]);
+    pointer('pointerup', to[0], to[1]);
+  }
+  function collisionLabels() {
+    return [...doc.querySelectorAll('#risk-list .risk-src-collision + .risk-src-name')]
+      .map((el) => el.textContent);
+  }
+
+  assert.equal(doc.querySelectorAll('#risk-list .risk-row').length, 9);
+  assert.ok(collisionLabels().some((t) => /丙/.test(t) && /丁/.test(t)),
+    '样例风险轴含丙×丁碰撞来源');
+
+  // 把丙、丁各自关键帧拖到安全位置（经引擎核算：丙 y=40、丁 y=390，
+  // 与甲、乙及彼此均无正长度碰撞，且不侵入中央矩形）
+  drag([60, 540], [40, 40]);
+  drag([500, 60], [500, 40]);
+  drag([940, 540], [960, 40]);
+  drag([160, 540], [40, 390]);
+  drag([500, 90], [500, 390]);
+  drag([940, 570], [960, 390]);
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.ok(collisionLabels().every((t) => !(/丙/.test(t) && /丁/.test(t))),
+    '拖动后丙×丁碰撞来源立即从风险轴消失');
+  assert.ok(collisionLabels().every((t) => !(/乙/.test(t) && /丙/.test(t))),
+    '不产生乙×丙新碰撞来源');
+
+  // 再把乙两帧移到 x=300 错峰：甲乙碰撞消失；并删除限员区与禁入区 → 空态
+  drag([500, 40], [300, 40]);
+  drag([500, 560], [300, 560]);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.ok(collisionLabels().every((t) => !(/甲/.test(t) && /乙/.test(t))),
+    '错峰后甲乙碰撞来源消失');
+
+  [...doc.querySelectorAll('.zone-row .zone-del')].forEach((btn) =>
+    btn.dispatchEvent(new window.MouseEvent('click', { bubbles: true })));
+  await new Promise((r) => setTimeout(r, 5));
+  // 中央禁入矩形与限员区同框：限员区删除后右键 (500,300) 命中禁入矩形
+  canvas.dispatchEvent(new window.MouseEvent('contextmenu', {
+    bubbles: true, cancelable: true, clientX: 500, clientY: 300, button: 2
+  }));
+  await new Promise((r) => setTimeout(r, 10));
+
+  assert.equal(doc.querySelectorAll('#risk-list .risk-row').length, 0, '风险全部消除');
+  assert.equal(doc.getElementById('risk-empty').hidden, false, '显示空态');
+  assert.match(doc.getElementById('risk-empty').textContent, /全程无风险/);
+  dom.window.close();
+});
+
+test('风险叠加时间轴：编辑区域上限消除超员后，对应来源立即从段中消失', async () => {
+  const dom = await boot();
+  const { window } = dom;
+  const doc = window.document;
+
+  function capSources() {
+    return [...doc.querySelectorAll('#risk-list .risk-src-capacity')];
+  }
+  assert.ok(capSources().length >= 1, '样例存在超员来源段');
+
+  // 限员区上限 1 → 3：不再超员，风险轴中的超员来源立即消失（碰撞/侵入仍在）
+  const limitInput = [...doc.querySelectorAll('.zone-row')[0].querySelectorAll('input[type="number"]')][4];
+  limitInput.value = '3';
+  limitInput.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 10));
+  assert.equal(capSources().length, 0, '提高上限后超员来源立即消失');
+  assert.ok(doc.querySelectorAll('#risk-list .risk-row').length > 0, '碰撞/侵入风险段仍在');
+  assert.ok(doc.querySelectorAll('#risk-list .risk-src-collision').length >= 1);
+  assert.ok(doc.querySelectorAll('#risk-list .risk-src-obstacle').length >= 1);
+
+  // 恢复上限 1：超员来源立即回来
+  limitInput.value = '1';
+  limitInput.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 10));
+  assert.ok(capSources().length >= 1, '恢复上限后超员来源立即出现');
+  dom.window.close();
+});

@@ -382,6 +382,87 @@ html, body {
 }
 .handoff-win-chip:hover { background: rgba(63, 185, 80, .3); text-decoration-style: solid; }
 
+/* 风险叠加时间轴面板 */
+.panel-risk { font-variant-numeric: tabular-nums; }
+.risk-list { padding: 6px 10px; max-height: 320px; overflow-y: auto; }
+.risk-empty {
+  padding: 8px 14px 4px;
+  font-size: 12px;
+  color: var(--ok);
+}
+.risk-row {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 9px;
+  margin-bottom: 6px;
+  background: var(--bg-panel-2);
+  border-left-width: 3px;
+  border-left-color: var(--danger);
+  cursor: pointer;
+}
+.risk-row:hover { background: #242d38; }
+.risk-row.active-now {
+  background: rgba(248, 81, 73, .12);
+  box-shadow: inset 3px 0 0 var(--danger);
+}
+.risk-row-head { display: flex; align-items: baseline; gap: 8px; }
+.risk-time { font-size: 13px; color: var(--text); }
+.risk-time b { color: #ffb3ae; font-weight: 700; }
+.risk-time:hover b { color: #ff8f8a; }
+.risk-dur {
+  margin-left: 8px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+.risk-sources { margin-top: 4px; line-height: 1.7; }
+.risk-src {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 4px;
+  padding: 0 5px;
+  margin: 1px 4px 1px 0;
+  vertical-align: 1px;
+}
+.risk-src-collision {
+  background: var(--danger-bg);
+  border: 1px solid rgba(248, 81, 73, .45);
+  color: #ffb3ae;
+}
+.risk-src-obstacle {
+  background: rgba(210, 153, 34, .18);
+  border: 1px solid rgba(210, 153, 34, .5);
+  color: #e3b341;
+}
+.risk-src-capacity {
+  background: rgba(45, 212, 191, .14);
+  border: 1px solid rgba(45, 212, 191, .45);
+  color: #5eead4;
+}
+.risk-src-name {
+  font-size: 12px;
+  color: var(--text);
+  margin-right: 8px;
+}
+.risk-members { margin-top: 3px; }
+.risk-member-tag {
+  display: inline-block;
+  font-size: 10px;
+  border-radius: 4px;
+  padding: 0 5px;
+  margin: 1px 4px 1px 0;
+  background: rgba(255, 255, 255, .04);
+  border: 1px solid rgba(255, 255, 255, .18);
+  color: var(--text);
+}
+.risk-hint {
+  padding: 0 14px 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+.risk-hint strong { color: var(--text); font-weight: 600; }
+
 /* 播放控制 */
 .transport { display: flex; align-items: center; gap: 8px; }
 .time-readout { color: var(--text-dim); display: flex; align-items: center; gap: 4px; }

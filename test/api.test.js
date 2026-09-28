@@ -486,6 +486,85 @@ test('GET /api/sample：样例携带交接配置，回传分析得可交接区�
   assert.ok(Math.abs(res.windows[0][1] - (6000 / 880 - 0.5)) < 1e-9);
 });
 
+// ---------- 风险叠加时间轴 riskTimeline ----------
+
+test('POST /api/analyze：返回 riskTimeline（碰撞/侵入/超员合段，同刻结算、来源与人员完整）', async () => {
+  // 甲静止中央（半径 0），乙 x=10t 横穿（半径 10）；同框矩形既是禁入区
+  // 又是上限 1 的限员区：[4,6] 段同时含 碰撞 + 2 条侵入 + 1 条超员
+  const body = {
+    duration: 12,
+    performers: [
+      { id: 'a', name: '甲', radius: 0, keys: [{ t: 0, x: 50, y: 50 }] },
+      { id: 'b', name: '乙', radius: 10, keys: [{ t: 0, x: 0, y: 50 }, { t: 12, x: 120, y: 50 }] }
+    ],
+    obstacles: [{ id: 'q', name: '中央区', x: 40, y: 40, width: 20, height: 20 }],
+    capacityZones: [{ id: 'q', name: '中央区', x: 40, y: 40, width: 20, height: 20, limit: 1 }]
+  };
+  const r = await postAnalyze(body);
+  assert.equal(r.status, 200);
+  const tl = r.json.riskTimeline;
+  assert.ok(Array.isArray(tl));
+  assert.ok(tl.length >= 5);
+
+  // 全部段：正持续、互不重叠、按开始升序
+  tl.forEach((seg, i) => {
+    assert.ok(seg.end > seg.start, `段 ${i} 必须正持续`);
+    assert.ok(Array.isArray(seg.sources) && seg.sources.length > 0);
+    assert.ok(Array.isArray(seg.memberIds) && seg.memberIds.length > 0);
+    if (i > 0) {
+      assert.ok(seg.start >= tl[i - 1].end - 1e-9, '段互不重叠');
+      assert.ok(seg.start >= tl[i - 1].start - 1e-9, '按开始升序');
+    }
+    seg.sources.forEach((src) => {
+      assert.ok(['collision', 'obstacle', 'capacity'].includes(src.type));
+      assert.equal(typeof src.label, 'string');
+      assert.ok(Array.isArray(src.members));
+    });
+  });
+
+  const tri = tl.find((s) => Math.abs(s.start - 4) < 1e-6 && Math.abs(s.end - 6) < 1e-6);
+  assert.ok(tri, '存在 [4,6] 三来源叠加段');
+  const countType = (t) => tri.sources.filter((s) => s.type === t).length;
+  assert.equal(countType('collision'), 1);
+  assert.equal(countType('obstacle'), 2);
+  assert.equal(countType('capacity'), 1);
+  assert.deepEqual(tri.memberIds, ['a', 'b']);
+});
+
+test('POST /api/analyze：无风险场景 riskTimeline 为空数组；旧请求同样带字段', async () => {
+  const r = await postAnalyze({
+    duration: 10,
+    performers: [
+      { id: 'a', name: '甲', radius: 5, keys: [{ t: 0, x: 0, y: 0 }] },
+      { id: 'b', name: '乙', radius: 5, keys: [{ t: 0, x: 500, y: 500 }] }
+    ]
+  });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.json.riskTimeline, []);
+});
+
+test('GET /api/sample：样例 riskTimeline 覆盖丙丁碰撞到 12s、共 9 段且含三来源叠加段', async () => {
+  const s = await getJson('/api/sample');
+  const r = await postAnalyze({
+    duration: s.json.duration,
+    performers: s.json.performers,
+    obstacles: s.json.obstacles,
+    handoffs: s.json.handoffs,
+    capacityZones: s.json.capacityZones
+  });
+  assert.equal(r.status, 200);
+  const tl = r.json.riskTimeline;
+  assert.equal(tl.length, 9);
+  assert.ok(Math.abs(tl[0].start - 2.6036) < 1e-3);
+  assert.ok(Math.abs(tl[tl.length - 1].end - 12) < 1e-9);
+  const tri = tl.find((seg) => {
+    const types = seg.sources.map((x) => x.type).sort();
+    return types.length >= 4 && types.includes('collision') &&
+      types.includes('obstacle') && types.includes('capacity');
+  });
+  assert.ok(tri, '样例含碰撞+侵入+超员叠加段');
+});
+
 // ---------- 区域限员 capacityZones ----------
 
 test('POST /api/analyze：接受 capacityZones 并返回 capacityResults（超员段/名单/峰值）', async () => {
@@ -596,6 +675,7 @@ test('POST /api/analyze：无 capacityZones 的旧请求保持兼容（空数组
   assert.deepEqual(r.json.capacityZones, []);
   assert.deepEqual(r.json.capacityResults, []);
   assert.deepEqual(r.json.scene.capacityZones, []);
+  assert.ok(Array.isArray(r.json.riskTimeline), '旧请求同样返回 riskTimeline 字段');
 });
 
 test('GET /api/sample：样例携带限员区域，回传分析得超员段与峰值', async () => {

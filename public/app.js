@@ -167,8 +167,10 @@
     renderCueResults();
     renderHandoffResults();
     renderZoneResults();
+    renderRiskTimeline();
     renderTimelineDanger();
     updatePlayhead();
+    updateRiskActive();
     refreshSnapshotDiff(); // 编辑场景后立即刷新方案对比
   }
 
@@ -1632,6 +1634,98 @@
     addZoneDefault();
   });
 
+  // ---------- 风险叠加时间轴（碰撞 / 侵入 / 超员 合并） ----------
+  var riskListEl = document.getElementById('risk-list');
+  var riskEmptyEl = document.getElementById('risk-empty');
+
+  var RISK_TYPE_LABEL = {
+    collision: '碰撞',
+    obstacle: '侵入',
+    capacity: '超员'
+  };
+
+  function riskTypeClass(type) {
+    return 'risk-src-' + type;
+  }
+
+  function renderRiskTimeline() {
+    riskListEl.innerHTML = '';
+    var segs = state.analysis ? state.analysis.riskTimeline : [];
+    if (!segs || !segs.length) {
+      riskEmptyEl.hidden = false;
+      riskEmptyEl.textContent = '全程无风险：没有碰撞、禁入区侵入或区域超员时段。';
+      updateRiskActive();
+      return;
+    }
+    riskEmptyEl.hidden = true;
+
+    segs.forEach(function (seg, idx) {
+      var row = document.createElement('div');
+      row.className = 'risk-row';
+      row.dataset.index = String(idx);
+      row.title = '点击跳转播放头到该段起点 ' + fmt(seg.start) + ' s';
+
+      var head = document.createElement('div');
+      head.className = 'risk-row-head';
+      var time = document.createElement('span');
+      time.className = 'risk-time t-jump';
+      time.dataset.t = String(seg.start);
+      time.innerHTML = '<b>' + fmt(seg.start) + ' – ' + fmt(seg.end) +
+        ' s</b><span class="risk-dur">' + fmt(seg.end - seg.start) + ' s</span>';
+      head.appendChild(time);
+      row.appendChild(head);
+
+      // 生效来源：碰撞 / 侵入 / 超员（段内已按类型→名称稳定排序）
+      var srcBox = document.createElement('div');
+      srcBox.className = 'risk-sources';
+      seg.sources.forEach(function (src) {
+        var chip = document.createElement('span');
+        chip.className = 'risk-src ' + riskTypeClass(src.type);
+        chip.textContent = RISK_TYPE_LABEL[src.type] || src.type;
+        chip.title = RISK_TYPE_LABEL[src.type] + '：' + src.label;
+        var name = document.createElement('span');
+        name.className = 'risk-src-name';
+        name.textContent = src.label;
+        srcBox.appendChild(chip);
+        srcBox.appendChild(name);
+      });
+      row.appendChild(srcBox);
+
+      // 涉及人员（按场景次序去重的并集，彩色姓名）
+      var memBox = document.createElement('div');
+      memBox.className = 'risk-members';
+      seg.members.forEach(function (m) {
+        var p = getPerformer(m.id);
+        var tag = document.createElement('span');
+        tag.className = 'risk-member-tag';
+        if (p) {
+          tag.style.borderColor = p.color + '66';
+          tag.style.color = p.color;
+        }
+        tag.textContent = p ? p.name : m.name;
+        memBox.appendChild(tag);
+      });
+      row.appendChild(memBox);
+
+      row.addEventListener('click', function () {
+        seek(seg.start);
+      });
+      riskListEl.appendChild(row);
+    });
+    updateRiskActive();
+  }
+
+  // 播放头移动时高亮当前生效的风险段
+  function updateRiskActive() {
+    var t = state.time;
+    Array.prototype.forEach.call(riskListEl.querySelectorAll('.risk-row'), function (row) {
+      var idx = Number(row.dataset.index);
+      var seg = state.analysis && state.analysis.riskTimeline
+        ? state.analysis.riskTimeline[idx] : null;
+      row.classList.toggle('active-now', !!seg && Core.isRiskSegmentActive(seg, t));
+    });
+  }
+
   // ---------- 画布绘制 ----------
   function draw() {
     ctx.clearRect(0, 0, WORLD_W, WORLD_H);
@@ -1698,6 +1792,7 @@
     renderObstacleEditor();
     renderZoneEditor();
     updateObstacleResultActive(t);
+    updateRiskActive();
   }
 
   function drawGrid() {

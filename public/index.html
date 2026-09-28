@@ -162,6 +162,19 @@
         </div>
       </div>
 
+      <div class="panel panel-risk" id="panel-risk">
+        <div class="panel-head">
+          <span>风险叠加时间轴（碰撞 · 侵入 · 超员 合并排序）</span>
+        </div>
+        <div id="risk-list" class="risk-list"></div>
+        <div id="risk-empty" class="risk-empty" hidden></div>
+        <div class="risk-hint">
+          复用<strong>碰撞</strong>、<strong>禁入区侵入</strong>与<strong>区域超员</strong>的同一批分析区间，合成为按时间排序、
+          互不重叠的风险段：同刻开始与结束统一结算、舍弃零长度段，生效来源或涉及人员一变化即分段。
+          <strong>点击任一段跳转播放头到该段起点</strong>；编辑走位或区域后立即刷新。
+        </div>
+      </div>
+
       <div class="panel panel-snapshots">
         <div class="panel-head">
           <span id="snap-head">方案快照（0/8 · 存于本机浏览器）</span>

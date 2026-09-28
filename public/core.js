@@ -100,6 +100,26 @@
  *     次序）；全程峰值人数只在有正持续时间的状态中取。
  *
  * 全程解析（停留区间端点由仿射开区间解出），不做任何离散帧抽样。
+ *
+ * ---------- 风险叠加时间轴（risk timeline） ----------
+ *
+ * 复用一次 analyzeScene 已经算出的三类分析区间——双人碰撞区间
+ * （pairs，相切零长度点舍弃）、禁入区侵入区间（obstacleConflicts，
+ * 角点相切零长度点舍弃）与区域超员段（capacityResults.intervals，
+ * 构造时已为正持续）——把每个区间实例化为一条带唯一标识的"风险
+ * 来源段"（含来源类型、名称与涉及人员名单），再对全部来源段的
+ * 开始（+1）/结束（−1）时刻做统一事件扫描线：
+ *
+ *   - 同一时刻（含跨来源解析的浮点同级误差，容差同区域限员口径）
+ *     的开始与结束事件先归为一组一并结算，组与组之间生效来源
+ *     集合恒定——同刻一始一终不会产生瞬时段；
+ *   - 相邻事件组之间即一个恒定状态，生效来源集合或涉及人员并集
+ *     一变化就立即分段；无生效来源的空档不成段；
+ *   - 零长度（含开场/收场单点）段一律舍弃。
+ *
+ * 输出按开始时刻排序、互不重叠的风险段，每段给出起止时刻、生效
+ * 来源（碰撞/侵入/超员，段内按类型与来源稳定排序）与涉及人员
+ * （按场景内表演者次序去重）。全程只做区间复用与事件扫描，零采样。
  */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
@@ -519,6 +539,8 @@
    * 交接区且间距≤触达距离的连续区间与起始时窗。
    * capacityZones 为规整后的区域限员配置，capacityResults 每项给出
    * 按圆心严格在内部统计的超员时间段（名单变化即分段）与全程峰值人数。
+   * riskTimeline 为复用碰撞/侵入/超员区间合成的按时间排序、互不重叠
+   * 的风险段（同刻结算、舍弃零长度段、生效来源或人员变化即分段）。
    */
   function analyzeScene(scene) {
     var duration = Number(scene.duration);
@@ -608,6 +630,9 @@
       return analyzeCapacityZone(z, ps, duration);
     });
 
+    // 风险叠加时间轴：复用上述碰撞 / 侵入 / 超员区间做统一事件扫描
+    var riskTimeline = buildRiskTimeline(ps, pairs, obstacleConflicts, capacityResults, duration);
+
     return {
       duration: duration,
       pairCount: pairs.length,
@@ -619,6 +644,7 @@
       handoffResults: handoffResults,
       capacityZones: capacityZones,
       capacityResults: capacityResults,
+      riskTimeline: riskTimeline,
       firstObstacleEntry: firstObstacle ? firstObstacle.firstEntry : null,
       firstObstacleConflict: firstObstacle
         ? [firstObstacle.performerId, firstObstacle.obstacleId]
@@ -1355,6 +1381,192 @@
     return false;
   }
 
+  // ---------- 风险叠加时间轴（risk timeline） ----------
+  //
+  // 把一次场景分析已得到的三类风险区间复用为带唯一标识的来源段，
+  // 再以统一扫描线把它们合成按时间排序、互不重叠的风险段：
+  //   1. 碰撞：analyzePair 的每个正长度 intervals 实例一条来源段
+  //      （相切零长度点舍弃），人员为该对两人；
+  //   2. 侵入：analyzeObstacle 的每个正长度 intervals 实例一条来源段
+  //      （角点相切零长度点舍弃），人员为该表演者；
+  //   3. 超员：analyzeCapacityZone 的每个 intervals 段（构造时已为
+  //      正持续）一条来源段，人员为该超员段名单。
+  // 全部来源段产生开始(+1)/结束(−1)事件；同一时刻（容差 ZONE_EPS
+  // 与区域限员的"同刻一并处理"同口径）的事件先成组一并应用，组间
+  // 生效来源集合恒定；每组结算后按 [组时刻, 下一组时刻) 成段，
+  // 生效来源为空或持续不大于容差（零长度段）一律舍弃。生效来源
+  // 集合变化天然意味着来源或涉及人员变化（人员并集即由来源集合
+  // 决定），故无需另做名单比较。
+
+  var RISK_TYPE_COLLISION = 'collision';
+  var RISK_TYPE_OBSTACLE = 'obstacle';
+  var RISK_TYPE_CAPACITY = 'capacity';
+  var RISK_TYPE_ORDER = {};
+  RISK_TYPE_ORDER[RISK_TYPE_COLLISION] = 0;
+  RISK_TYPE_ORDER[RISK_TYPE_OBSTACLE] = 1;
+  RISK_TYPE_ORDER[RISK_TYPE_CAPACITY] = 2;
+
+  /**
+   * 合成风险叠加时间轴。
+   * performers 为场景演员（人员名单按其次序去重）；pairs /
+   * obstacleConflicts / capacityResults 为 analyzeScene 同次产物。
+   * 返回 [{
+   *   start, end,
+   *   sources: [{ id, type, label, members:[{id,name}] }],  // 段内生效来源（类型→标签稳定排序）
+   *   memberIds: [...],                                     // 涉及人员 id（按场景次序去重）
+   *   members: [{id,name}]
+   * }]，按开始时刻升序、互不重叠、全部正持续。
+   */
+  function buildRiskTimeline(performers, pairs, obstacleConflicts, capacityResults, duration) {
+    var T = Number(duration);
+    if (!(T > 0)) throw new Error('duration 必须为正数');
+
+    var perfOrder = {};
+    var perfName = {};
+    (performers || []).forEach(function (p, i) {
+      perfOrder[p.id] = i;
+      perfName[p.id] = p.name || p.id;
+    });
+    function memberIdsOf(idList) {
+      var seen = {};
+      var out = [];
+      idList.forEach(function (id) {
+        if (id === null || id === undefined || seen[id]) return;
+        seen[id] = true;
+        out.push(id);
+      });
+      out.sort(function (a, b) {
+        var oa = (perfOrder[a] === undefined ? 1e9 : perfOrder[a]);
+        var ob = (perfOrder[b] === undefined ? 1e9 : perfOrder[b]);
+        return oa - ob || (String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0);
+      });
+      return out;
+    }
+
+    var seq = 0;
+    var spans = [];
+    function pushSpan(spanStart, spanEnd, type, label, memberIds, extra) {
+      if (!(spanEnd - spanStart > ZONE_EPS)) return; // 舍弃相切/瞬时等零长度段
+      var span = {
+        id: 'r' + (seq++),
+        type: type,
+        label: label,
+        start: Math.max(0, Math.min(T, spanStart)),
+        end: Math.max(0, Math.min(T, spanEnd)),
+        memberIds: memberIdsOf(memberIds)
+      };
+      if (extra) Object.keys(extra).forEach(function (k) { span[k] = extra[k]; });
+      spans.push(span);
+    }
+
+    // 碰撞：每对的每个正长度区间实例一条
+    (pairs || []).forEach(function (pair) {
+      if (!pair.collision) return;
+      pair.intervals.forEach(function (iv) {
+        pushSpan(iv[0], iv[1], RISK_TYPE_COLLISION,
+          pair.aName + ' × ' + pair.bName,
+          [pair.aId, pair.bId]);
+      });
+    });
+
+    // 禁入区侵入：每人 × 每矩形的每个正长度区间实例一条
+    (obstacleConflicts || []).forEach(function (entry) {
+      if (!entry.conflict) return;
+      entry.intervals.forEach(function (iv) {
+        pushSpan(iv[0], iv[1], RISK_TYPE_OBSTACLE,
+          entry.performerName + ' · ' + entry.obstacleName,
+          [entry.performerId]);
+      });
+    });
+
+    // 区域超员：每个超员段（已为正持续、名单恒定）实例一条
+    (capacityResults || []).forEach(function (res) {
+      res.intervals.forEach(function (iv) {
+        pushSpan(iv.start, iv.end, RISK_TYPE_CAPACITY,
+          res.zoneName + '（' + iv.count + ' 人 / 限 ' + res.limit + '）',
+          iv.members.map(function (m) { return m.id; }),
+          { count: iv.count, limit: res.limit });
+      });
+    });
+
+    // 统一事件流：开始 +1 / 结束 −1，同刻成组一并结算
+    var events = [];
+    spans.forEach(function (s) {
+      events.push({ t: s.start, delta: 1, span: s });
+      events.push({ t: s.end, delta: -1, span: s });
+    });
+    events.sort(function (a, b) {
+      return a.t - b.t || (b.delta - a.delta); // 同时刻次序仅为稳定，仍按组应用
+    });
+
+    function snapshot(active, segStart, t) {
+      if (t - segStart <= ZONE_EPS) return null; // 舍弃零长度段（含开场/收场单点）
+      var ids = Object.keys(active);
+      if (!ids.length) return null;
+      var list = ids.map(function (id) { return active[id]; });
+      list.sort(function (a, b) {
+        var ta = RISK_TYPE_ORDER[a.type] === undefined ? 99 : RISK_TYPE_ORDER[a.type];
+        var tb = RISK_TYPE_ORDER[b.type] === undefined ? 99 : RISK_TYPE_ORDER[b.type];
+        if (ta !== tb) return ta - tb;
+        return a.label < b.label ? -1 : a.label > b.label ? 1
+          : (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+      });
+      var sources = list.map(function (s) {
+        return {
+          id: s.id,
+          type: s.type,
+          label: s.label,
+          members: s.memberIds.map(function (id) {
+            return { id: id, name: perfName[id] || id };
+          })
+        };
+      });
+      var unionIds = memberIdsOf(Array.prototype.concat.apply([],
+        list.map(function (s) { return s.memberIds; })));
+      return {
+        start: segStart,
+        end: t,
+        sources: sources,
+        memberIds: unionIds,
+        members: unionIds.map(function (id) {
+          return { id: id, name: perfName[id] || id };
+        })
+      };
+    }
+
+    var segments = [];
+    var active = {};
+    var segStart = 0;
+    var i = 0;
+    while (i < events.length) {
+      var t = events[i].t;
+      // 结算 [segStart, t) 的恒定状态（无生效来源时空档不成段）
+      var seg = snapshot(active, segStart, t);
+      if (seg) segments.push(seg);
+      // 同一时刻的全部开始/结束一并应用：同刻一始一终互相抵消，
+      // 不产生瞬时段；组与组之间生效来源集合恒定
+      var j = i;
+      while (j < events.length &&
+             Math.abs(events[j].t - t) <= ZONE_EPS + MERGE_REL * Math.max(Math.abs(t), 1)) {
+        var ev = events[j];
+        if (ev.delta > 0) active[ev.span.id] = ev.span;
+        else delete active[ev.span.id];
+        j++;
+      }
+      segStart = t;
+      i = j;
+    }
+    var tail = snapshot(active, segStart, T);
+    if (tail) segments.push(tail);
+    return segments;
+  }
+
+  /** 查询时刻 t 某风险段是否生效（含端点容差，供侧栏播放高亮）。 */
+  function isRiskSegmentActive(seg, t) {
+    if (!seg) return false;
+    return t + EPS >= seg.start && t - EPS <= seg.end;
+  }
+
   // ---------- 方案快照：两场景对比 ----------
 
   var DIFF_EPS = 1e-6;   // 区间端点"时间变化"判定容差（秒）
@@ -1755,6 +1967,11 @@
     normalizeCapacityZones: normalizeCapacityZones,
     analyzeCapacityZone: analyzeCapacityZone,
     isCapacityOverAt: isCapacityOverAt,
+    buildRiskTimeline: buildRiskTimeline,
+    isRiskSegmentActive: isRiskSegmentActive,
+    RISK_TYPE_COLLISION: RISK_TYPE_COLLISION,
+    RISK_TYPE_OBSTACLE: RISK_TYPE_OBSTACLE,
+    RISK_TYPE_CAPACITY: RISK_TYPE_CAPACITY,
     compareScenes: compareScenes,
     builtinScene: builtinScene
   };
