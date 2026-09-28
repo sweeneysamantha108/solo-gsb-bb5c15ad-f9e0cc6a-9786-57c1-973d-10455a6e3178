@@ -118,6 +118,19 @@
         </div>
       </div>
 
+      <div class="panel panel-risktl" id="panel-risk-timeline">
+        <div class="panel-head">
+          <span>风险叠加时间轴（碰撞 · 禁入侵入 · 区域超员）</span>
+        </div>
+        <div id="risk-timeline-list" class="risk-tl-list"></div>
+        <div id="risk-timeline-empty" class="cue-empty" hidden></div>
+        <div class="cue-hint">
+          复用碰撞、禁入区侵入与区域超员的分析区间，合成为<strong>按时间排序、互不重叠</strong>的风险段：
+          同刻开始与结束统一结算（舍弃零长度段），生效风险来源或涉及人员变化立即分段。
+          <strong>点击任意段跳转播放头</strong>到该段起点；编辑走位或区域后立即刷新。
+        </div>
+      </div>
+
       <div class="panel panel-cues" id="panel-cues">
         <div class="panel-head">
           <span>入场口令 · <span id="cue-performer-name"></span></span>

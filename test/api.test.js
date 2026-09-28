@@ -621,3 +621,52 @@ test('GET /api/sample：样例携带限员区域，回传分析得超员段与�
   assert.equal(z.peak, 2);
   assert.deepEqual(z.intervals[0].members.map((m) => m.id), ['p1', 'p2']);
 });
+
+test('POST /api/analyze：返回风险叠加时间轴 riskTimeline（三类来源、互不重叠、点击起点字段齐全）', async () => {
+  const s = await getJson('/api/sample');
+  const r = await postAnalyze({
+    duration: s.json.duration,
+    performers: s.json.performers,
+    obstacles: s.json.obstacles,
+    handoffs: s.json.handoffs,
+    capacityZones: s.json.capacityZones
+  });
+  assert.equal(r.status, 200);
+  const tl = r.json.riskTimeline;
+  assert.ok(Array.isArray(tl));
+  assert.ok(tl.length >= 3, '样例应合成多段风险');
+  const types = new Set();
+  for (let i = 0; i < tl.length; i++) {
+    const seg = tl[i];
+    assert.ok(seg.end > seg.start, '风险段必须有正持续时间（零长度段已舍弃）');
+    assert.ok(seg.sources.length > 0);
+    seg.sources.forEach((src) => {
+      assert.ok(['collision', 'obstacle', 'capacity'].includes(src.type));
+      assert.ok(typeof src.typeLabel === 'string' && src.typeLabel.length > 0);
+      assert.ok(typeof src.label === 'string');
+      assert.ok(Array.isArray(src.members) && src.members.length > 0);
+      types.add(src.type);
+    });
+    assert.ok(seg.members.length > 0);
+    if (i > 0) assert.ok(seg.start >= tl[i - 1].end - 1e-6, '段必须按时间排序且互不重叠');
+  }
+  assert.deepEqual([...types].sort(), ['capacity', 'collision', 'obstacle'], '三类风险来源都应出现');
+
+  // 超员风险段约 [5.18,6.82]（碰撞重叠处再细分，首段起点/末段终点口径不变）
+  const capSegs = tl.filter((seg) => seg.sources.some((x) => x.type === 'capacity'));
+  assert.ok(capSegs.length >= 1);
+  assert.ok(Math.abs(capSegs[0].start - 5.18) < 0.05);
+  assert.ok(Math.abs(capSegs[capSegs.length - 1].end - 6.82) < 0.05);
+});
+
+test('POST /api/analyze：无风险场景 riskTimeline 为空；旧请求字段不缺省该键', async () => {
+  const r = await postAnalyze({
+    duration: 10,
+    performers: [
+      { id: 'a', name: 'a', radius: 0, keys: [{ t: 0, x: 0, y: 0 }, { t: 10, x: 10, y: 0 }] },
+      { id: 'b', name: 'b', radius: 0, keys: [{ t: 0, x: 100, y: 100 }, { t: 10, x: 110, y: 100 }] }
+    ]
+  });
+  assert.equal(r.status, 200);
+  assert.deepEqual(r.json.riskTimeline, []);
+});

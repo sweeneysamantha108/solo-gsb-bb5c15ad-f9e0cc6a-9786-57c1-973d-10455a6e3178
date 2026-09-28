@@ -1123,3 +1123,117 @@ test('区域限员：配置随快照保存并在载入时恢复', async () => {
   assert.equal([...rows[0].querySelectorAll('input[type="number"]')][4].value, '3');
   dom.window.close();
 });
+
+test('风险叠加时间轴：启动即合成风险段（三类来源标签/人员），按时间排列、无零长度段', async () => {
+  const dom = await boot();
+  const doc = dom.window.document;
+
+  const rows = [...doc.querySelectorAll('#risk-timeline-list .risk-tl-row')];
+  assert.ok(rows.length >= 3, '样例应合成多段风险');
+
+  let prevEnd = -Infinity;
+  rows.forEach((row) => {
+    const m = row.querySelector('.risk-tl-time').textContent.match(/([\d.]+)\s*–\s*([\d.]+)\s*s/);
+    assert.ok(m, '每段列出起止时刻');
+    const start = Number(m[1]);
+    const end = Number(m[2]);
+    assert.ok(end > start, '舍弃零长度段');
+    assert.ok(start + 1e-6 >= prevEnd, '按时间排序、互不重叠（允许同刻相接）');
+    prevEnd = end;
+    assert.ok(row.querySelectorAll('.risk-tag').length >= 1, '每段列出来源标签');
+    assert.ok(row.querySelectorAll('.risk-tl-members .risk-member').length >= 1, '每段列出涉及人员');
+  });
+
+  // 三类来源标签至少在全部段中出现（样例含碰撞/禁入侵入/区域超员）
+  const allTags = [...doc.querySelectorAll('#risk-timeline-list .risk-tag')].map((el) =>
+    el.classList.contains('risk-tag-collision') ? 'collision'
+      : el.classList.contains('risk-tag-obstacle') ? 'obstacle'
+        : el.classList.contains('risk-tag-capacity') ? 'capacity' : '?');
+  assert.ok(allTags.includes('collision'));
+  assert.ok(allTags.includes('obstacle'));
+  assert.ok(allTags.includes('capacity'));
+
+  // 含区域超员来源的首段起点 ≈ 5.18（超员状态起点）
+  const firstCap = rows.find((r) => r.querySelector('.risk-tag-capacity'));
+  assert.ok(firstCap);
+  assert.match(firstCap.querySelector('.risk-tl-time').textContent, /^5\.18/);
+  dom.window.close();
+});
+
+test('风险叠加时间轴：点击段落跳转播放头到段起点；播放过程中当前段高亮', async () => {
+  const dom = await boot();
+  const { window } = dom;
+  const doc = window.document;
+
+  const rows = [...doc.querySelectorAll('#risk-timeline-list .risk-tl-row')];
+  // 首段为丙×丁跟进碰撞，起点 ≈ 2.60
+  const first = rows[0];
+  assert.match(first.querySelector('.risk-tl-time').textContent, /^2\.60/);
+  first.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+  let tv = Number(doc.getElementById('time-input').value);
+  assert.ok(Math.abs(tv - 2.604) < 0.02, `点击段跳转到段起点，实际 ${tv}`);
+  assert.ok(first.classList.contains('active-now'), '跳转后该段标记为当前生效');
+
+  // 跳到无风险时刻（约 4.5s 仍有风险；取 0s——开场丙丁尚未碰撞，无风险段）
+  doc.getElementById('time-input').value = '0';
+  doc.getElementById('time-input').dispatchEvent(new window.Event('change', { bubbles: true }));
+  assert.ok(![...doc.querySelectorAll('#risk-timeline-list .risk-tl-row')]
+    .some((r) => r.classList.contains('active-now')), '无风险时刻无高亮段');
+
+  // 跳到超员段内（约 6s）：含 capacity 标签的段高亮
+  doc.getElementById('time-input').value = '6';
+  doc.getElementById('time-input').dispatchEvent(new window.Event('change', { bubbles: true }));
+  const active = [...doc.querySelectorAll('#risk-timeline-list .risk-tl-row.active-now')];
+  assert.equal(active.length, 1, '同一时刻至多一段生效（互不重叠）');
+  assert.ok(active[0].querySelector('.risk-tag-capacity'), 't=6 处于含区域超员的风险段');
+  assert.ok(active[0].querySelector('.risk-tag-collision'), 't=6 同时有碰撞来源');
+  dom.window.close();
+});
+
+test('风险叠加时间轴：编辑走位实时刷新；提高限员上限后超员来源即时消失', async () => {
+  const dom = await boot();
+  const { window } = dom;
+  const doc = window.document;
+
+  const countWithCap = () => [...doc.querySelectorAll('#risk-timeline-list .risk-tag-capacity')].length;
+  const segCount = () => doc.querySelectorAll('#risk-timeline-list .risk-tl-row').length;
+  assert.ok(countWithCap() >= 1, '样例含区域超员风险来源');
+  const before = segCount();
+
+  // 把样例限员区上限改为 3（峰值仅 2 人）：超员风险来源立即消失
+  const limitInput = document_limitInput(doc);
+  limitInput.value = '3';
+  limitInput.dispatchEvent(new window.Event('change', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 8));
+  assert.equal(countWithCap(), 0, '上限提高后区域超员来源即时消失');
+  assert.ok(segCount() <= before, '风险来源减少后段落数不增加');
+  assert.equal(doc.getElementById('risk-timeline-empty').hidden, true, '仍有碰撞/侵入风险，不显示空态');
+
+  // 把乙两帧拖到 x=300（与既有拖走位冒烟同构）：甲乙错峰、乙不再进入中央区，
+  // 侵入与碰撞结构改变 → 风险段随之刷新（段数或标签文本发生变化）
+  const canvas = doc.getElementById('stage');
+  const pointer = (type, x, y) => canvas.dispatchEvent(
+    new window.MouseEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0 }));
+  pointer('pointerdown', 500, 40);
+  pointer('pointermove', 300, 40);
+  pointer('pointerup', 300, 40);
+  pointer('pointerdown', 500, 560);
+  pointer('pointermove', 300, 560);
+  pointer('pointerup', 300, 560);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.ok(segCount() >= 1, '拖走位后时间轴仍可渲染其它风险段');
+  const stillChronological = [...doc.querySelectorAll('#risk-timeline-list .risk-tl-row')]
+    .every((row, i, arr) => {
+      if (i === 0) return true;
+      const a = arr[i - 1].querySelector('.risk-tl-time').textContent.match(/([\d.]+)\s*–/)[1];
+      const b = row.querySelector('.risk-tl-time').textContent.match(/([\d.]+)\s*–/)[1];
+      return Number(b) >= Number(a) - 1e-6;
+    });
+  assert.ok(stillChronological, '编辑后仍按时间排序');
+  dom.window.close();
+});
+
+function document_limitInput(doc) {
+  // 区域限员行内第 5 个数字输入框为人数上限（x,y,宽,高,上限）
+  return [...doc.querySelectorAll('.zone-row input[type="number"]')][4];
+}

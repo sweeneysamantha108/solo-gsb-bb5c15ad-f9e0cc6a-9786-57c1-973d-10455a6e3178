@@ -167,6 +167,7 @@
     renderCueResults();
     renderHandoffResults();
     renderZoneResults();
+    renderRiskTimeline();
     renderTimelineDanger();
     updatePlayhead();
     refreshSnapshotDiff(); // 编辑场景后立即刷新方案对比
@@ -1698,6 +1699,7 @@
     renderObstacleEditor();
     renderZoneEditor();
     updateObstacleResultActive(t);
+    updateRiskTimelineActive(t);
   }
 
   function drawGrid() {
@@ -2462,6 +2464,80 @@
         '.obs-row[data-pid="' + entry.performerId + '"][data-oid="' + entry.obstacleId + '"]');
       if (!row) return;
       row.classList.toggle('active-now', Core.isPerformerInObstacle(entry, entry.performerId, t));
+    });
+  }
+
+  // ---------- 风险叠加时间轴（侧栏） ----------
+  var riskTlListEl = document.getElementById('risk-timeline-list');
+  var riskTlEmptyEl = document.getElementById('risk-timeline-empty');
+
+  function riskMemberHtml(m) {
+    var p = getPerformer(m.id);
+    return '<span class="risk-member" style="' +
+      (p ? 'border-color:' + p.color + '66;color:' + p.color + ';' : '') + '">' +
+      '<span class="mini-dot" style="background:' + (p ? p.color : '#888') + '"></span>' +
+      escapeHtml(m.name) + '</span>';
+  }
+
+  // 编辑走位/区域后随 recompute 整体重建（段落数量通常很少，输入焦点均在其它面板）
+  function renderRiskTimeline() {
+    riskTlListEl.innerHTML = '';
+    if (!state.analysis) return;
+    var segs = state.analysis.riskTimeline || [];
+    if (!segs.length) {
+      riskTlEmptyEl.hidden = false;
+      riskTlEmptyEl.textContent = '当前方案全程无碰撞、禁入区侵入或区域超员风险。';
+      updateRiskTimelineActive(state.time);
+      return;
+    }
+    riskTlEmptyEl.hidden = true;
+
+    segs.forEach(function (seg, idx) {
+      var row = document.createElement('div');
+      row.className = 'risk-tl-row';
+      row.dataset.idx = idx;
+
+      var head = document.createElement('div');
+      head.className = 'risk-tl-head';
+      head.innerHTML =
+        '<span class="risk-tl-time" title="点击跳转播放头到该段起点">' +
+        fmt(seg.start) + ' – ' + fmt(seg.end) + ' s</span>' +
+        '<span class="risk-tl-dur">' + fmt(seg.end - seg.start) + ' s</span>';
+      row.appendChild(head);
+
+      seg.sources.forEach(function (src) {
+        var line = document.createElement('div');
+        line.className = 'risk-src-line risk-src-' + src.type;
+        line.innerHTML =
+          '<span class="risk-tag risk-tag-' + src.type + '">' + escapeHtml(src.typeLabel) + '</span>' +
+          '<span class="risk-src-label">' + escapeHtml(src.label) + '</span>' +
+          '<span class="risk-src-members">' +
+          src.members.map(riskMemberHtml).join('') + '</span>';
+        row.appendChild(line);
+      });
+
+      var involved = document.createElement('div');
+      involved.className = 'risk-tl-members';
+      involved.innerHTML = '<span class="risk-tl-members-label">涉及人员</span>' +
+        seg.members.map(riskMemberHtml).join('');
+      row.appendChild(involved);
+
+      row.title = '点击跳转播放头到该段起点 ' + fmt(seg.start) + ' s';
+      row.addEventListener('click', function () {
+        seek(seg.start);
+      });
+      riskTlListEl.appendChild(row);
+    });
+    updateRiskTimelineActive(state.time);
+  }
+
+  // 播放头移动时高亮当前生效的风险段（播放 / 拖拽中实时）
+  function updateRiskTimelineActive(t) {
+    if (!state.analysis) return;
+    var segs = state.analysis.riskTimeline || [];
+    Array.prototype.forEach.call(riskTlListEl.children, function (row) {
+      var idx = Number(row.dataset.idx);
+      row.classList.toggle('active-now', !!segs[idx] && Core.isRiskSegmentActive(segs[idx], t));
     });
   }
 
